@@ -1,0 +1,230 @@
+CreditMapper
+
+
+package org.myorg;
+
+import java.io.IOException;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Mapper;
+
+// Define the CreditMapper class extending the Mapper class
+public class CreditMapper extends Mapper<LongWritable, Text, Text, LongWritable> {
+
+    // Override the map method that processes input key-value pairs and generates intermediate key-value pairs
+    @Override
+    protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        
+        // Split the input text line (CSV) into an array of column values
+        String[] columns = value.toString().split(",");
+        
+        // Extract the city value from the second column (index 1) and remove double quotes
+        String city = columns[1].replaceAll("\"", "");
+        
+        // Parse the amount value from the seventh column (index 6) as a long
+        long amount = Long.parseLong(columns[6]);
+        
+        // Write the intermediate key-value pair (city, amount) to the context object
+        context.write(new Text(city), new LongWritable(amount));
+    }
+}
+
+
+
+
+CreditReducer
+
+
+package org.myorg;
+
+import java.io.IOException;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Reducer;
+
+// Define the CreditReducer class extending the Reducer class
+public class CreditReducer extends Reducer<Text, LongWritable, Text, Text> {
+
+    // Override the reduce method that processes intermediate key-value pairs and generates the final key-value pairs
+    @Override
+    protected void reduce(Text key, Iterable<LongWritable> values, Context context) throws IOException, InterruptedException {
+        
+        // Initialize the sum and count variables for aggregation
+        long sum = 0;
+        int count = 0;
+        
+        // Iterate over the values (amounts) associated with the same key (city) and aggregate them
+        for (LongWritable value : values) {
+            sum += value.get(); // Add the value to the sum
+            count++; // Increment the count by 1
+        }
+        
+        // Write the final key-value pair (city, sum and count) to the context object
+        context.write(key, new Text(sum + "," + count));
+    }
+}
+
+
+
+
+
+CreditMapper2
+
+
+// Import required packages
+package org.myorg;
+
+import java.io.IOException;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Mapper;
+
+// Define the CreditMapper2 class extending the Mapper class
+public class CreditMapper2 extends Mapper<LongWritable, Text, Text, Text> {
+
+    // Override the map method that processes input key-value pairs and generates intermediate key-value pairs
+    @Override
+    protected void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
+        
+        // Write the input value as the key and an empty string as the value to the context object
+        context.write(value, new Text(""));
+    }
+}
+
+
+
+
+
+CreditReducer2
+
+
+// Import required packages
+package org.myorg;
+
+import java.io.IOException;
+import java.util.TreeMap;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Reducer;
+
+// Define the CreditReducer2 class extending the Reducer class
+public class CreditReducer2 extends Reducer<Text, Text, Text, Text> {
+    // Initialize a TreeMap to store the top cities by average spent
+    private TreeMap<Double, String> topCities = new TreeMap<>();
+
+    // Override the reduce method that processes intermediate key-value pairs and generates the final key-value pairs
+    @Override
+    protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
+        // Split the input key text into city, sum, and count parts
+        String[] parts = key.toString().split("\t");
+        String city = parts[0];
+        String[] sumAndCount = parts[1].split(",");
+        double sum = Double.parseDouble(sumAndCount[0]);
+        int count = Integer.parseInt(sumAndCount[1]);
+        
+        // Calculate the average spent for the city
+        double average = sum / count;
+
+        // Add the city and its average to the TreeMap
+        topCities.put(average, city);
+
+        // If the TreeMap has more than 3 entries, remove the lowest average
+        if (topCities.size() > 3) {
+            topCities.remove(topCities.firstKey());
+        }
+    }
+
+    // Override the cleanup method, which runs after the reduce method is finished
+    @Override
+    protected void cleanup(Context context) throws IOException, InterruptedException {
+        // Initialize a StringBuilder to store the result string
+        StringBuilder result = new StringBuilder();
+        result.append("The Top 3 cities with highest average spent is: ");
+        
+        int count = 0;
+        // Iterate over the TreeMap in descending order and append the city and average to the result string
+        for (Double average : topCities.descendingKeySet()) {
+            String city = topCities.get(average);
+            result.append("\"").append(city).append("\" : \"").append(String.format("%.2f", average)).append("\"");
+            count++;
+            if (count < topCities.size()) {
+                result.append(", ");
+            }
+        }
+
+        // Write the result string as the key and an empty string as the value to the context object
+        context.write(new Text(result.toString()), new Text(""));
+    }
+}
+
+
+CreditDriver
+
+// Import required packages
+package org.myorg;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
+
+// Define the CreditDriver class
+public class CreditDriver {
+    public static void main(String[] args) throws Exception {
+        // Check if the required number of arguments is provided
+        if (args.length != 4) {
+            System.err.println("Usage: CreditDriver <input path> <output path for city-wise average> <output path for top 3 cities>");
+            System.exit(-1);
+        }
+
+        // Initialize the Hadoop Configuration object
+        Configuration conf = new Configuration();
+
+        // Create and configure the first job (City Amount)
+        Job job1 = Job.getInstance(conf, "City Amount");
+        job1.setJarByClass(CreditDriver.class);
+
+        job1.setMapperClass(CreditMapper.class);
+        job1.setReducerClass(CreditReducer.class);
+
+        job1.setMapOutputKeyClass(Text.class);
+        job1.setMapOutputValueClass(LongWritable.class);
+
+        job1.setOutputKeyClass(Text.class);
+        job1.setOutputValueClass(Text.class);
+
+        // Set input and output paths for the first job
+        TextInputFormat.addInputPath(job1, new Path(args[0]));
+        TextOutputFormat.setOutputPath(job1, new Path(args[1]));
+
+        // Execute the first job and wait for completion
+        if (!job1.waitForCompletion(true)) {
+            System.exit(1);
+        }
+
+        // Create and configure the second job (City Wise Average)
+        Job job2 = Job.getInstance(conf, "City Wise Average");
+        job2.setJarByClass(CreditDriver.class);
+
+        job2.setMapperClass(CreditMapper2.class);
+        job2.setReducerClass(CreditReducer2.class);
+
+        job2.setMapOutputKeyClass(Text.class);
+        job2.setMapOutputValueClass(Text.class);
+
+        job2.setOutputKeyClass(Text.class);
+        job2.setOutputValueClass(Text.class);
+
+        // Set input and output paths for the second job
+        TextInputFormat.addInputPath(job2, new Path(args[1]));
+        TextOutputFormat.setOutputPath(job2, new Path(args[2]));
+
+        // Execute the second job and wait for completion, then exit with an appropriate status code
+        System.exit(job2.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+
+
